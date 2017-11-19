@@ -1,0 +1,292 @@
+<html>
+
+<head>
+	<title>CSV Call Centre Simulation</title>
+</head>
+
+<script language='javascript'>
+
+	// Language functions
+	parseTime = function(a){
+		a = Math.round(a); // in seconds
+		if(a>=60) return Math.floor(a/60)+"min "+(a-Math.floor(a/60)*60)+"s";
+		else return a+"s";
+	}
+	percent2dp = function(a){
+		return Math.round(a*10000)/100;
+	}
+	q = function(a){
+		return document.getElementById(a);
+	}
+	qv = function(a){
+		return document.getElementById(a).value;
+	}
+	
+	// DISPLAY SETTINGS
+	op_wait = false;
+	op_results = new Array();
+	
+	// SIM PARAMETERS
+	p_runs = 50; // No. of times to repeat the simulation
+	p_E_L = 480; // E[call length], in secs
+	p_totalcalls = 880;
+	p_E_W = 3600*9/p_totalcalls; // E[time to next inbound call], in secs (approximation)
+	p_servers = 40; // Number of servers
+	p_E_ACW = function(call_length){ // E[ACW time], in secs
+		if(call_length<60) return 0;
+		else if(call_length>900) return 450;
+		else return (call_length/120)*60;
+	}
+	p_open = 8*3600; // Time at which helpline opens, in secs since 12mn
+	p_close = 17*3600; // Time at which helpline closes, in secs since 12mn
+
+	// SIM VARIABLES
+	//		server[i] = what time server I will be free
+	servers = new Array();
+	for(i=0;i<p_servers;i++){
+		servers[i] = -1;
+	}
+	servers_pool = new Array();
+	
+	//		Queue: priority for callers who have waited the longest
+	//		One caller = one element of queue array
+	//		Value of element = time which caller called in
+	queue = new Array();
+	
+	// SIM KPIs
+	kpi_waittime = new Array();
+	longest_wait = 0;
+	server_idle_time = 0;
+	
+	// SIM FUNCTIONS
+	genCallInterval = function(){
+		return (-1*Math.log(Math.random()))*p_E_W;
+	}
+	
+	genCallACW = function(call_length){
+		return (-1*Math.log(Math.random()))*p_E_ACW(call_length);
+	}
+	
+	genCallLength = function(){
+		return (-1*Math.log(Math.random()))*p_E_L;
+	}
+	
+	genQueue = function(){ // Generates the call queue for the day
+		clock = p_open;
+		while(clock<p_close){
+			interval = genCallInterval();
+			queue[queue.length] = clock+interval;
+			clock += interval;
+		}
+	}
+	
+	resetSimVars = function(){
+		queue = new Array();
+		servers_pool = new Array();
+		for(i=0;i<p_servers;i++){
+			servers_pool[i] = i;
+			servers[i] = 8*3600;
+		}
+		kpi_waittime = new Array();
+		longest_wait = 0;
+		server_idle_time = 0;
+	}
+	
+	runSim = function(this_run){
+		resetSimVars();
+		// Generate call queue
+		genQueue();
+		q("result").innerHTML = queue.length+" calls";
+		need_to_wait = 0;
+		no_need_wait = 0;
+		hadLunch = new Array();
+		for(i=0;i<p_servers;i++){
+			hadLunch[i] = false;
+		}
+		// Assign calls to servers
+		while(queue.length>0){
+			// Each iteration processes ONE queue
+			// to be improved -- now loop through to find the earliest server
+			now_queue = queue.shift();
+			earliest_free_time = 23*3600;
+			earliest_free = -1;
+			for(k=0;k<servers_pool.length;k++){
+				if(servers[servers_pool[k]]<now_queue){ // this guy is free -- use him
+					earliest_free = k;
+					break;
+				}
+				if(servers[servers_pool[k]]<earliest_free_time){
+					earliest_free_time = servers[servers_pool[k]];
+					earliest_free = k;
+				}
+			}
+			//now_server = servers_pool.shift();
+			now_server = servers_pool.splice(earliest_free,1);
+			//q("result").innerHTML += "<br /><font style='color:red;'>"+now_queue+"</font>";
+			//q("result").innerHTML += "<br />server "+now_server+": "+(call_length + call_ACW)+"s";
+			call_length = genCallLength();
+			call_ACW = genCallACW(call_length);
+			if(servers[now_server]>now_queue){ // caller has to wait
+				now_wait = servers[now_server] - now_queue;
+				kpi_waittime[kpi_waittime.length] = now_wait;
+				if(op_wait) q("result").innerHTML += "<br /><font style='color:red;'>wait: "+now_wait+"</font>";
+				if(now_wait>longest_wait) longest_wait = now_wait;
+				need_to_wait++;
+				servers[now_server] += call_length + call_ACW;
+			}else{ // no wait -- server has been idle
+				kpi_waittime[kpi_waittime.length] = 0;
+				if(op_wait) q("result").innerHTML += "<br /><font style='color:green;'>no wait -- idle "+(now_queue - servers[now_server])+"</font>";
+				no_need_wait++;
+				server_idle_time += now_queue - servers[now_server];
+				servers[now_server] = now_queue + call_length + call_ACW;
+			}
+			if(!hadLunch[now_server]){
+				if(now_server%2==0&&servers[now_server]>12*3600){
+					servers[now_server] += 3600; // lunch
+					hadLunch[now_server] = true;
+				}
+				if(now_server%2==1&&servers[now_server]>13*3600){
+					servers[now_server] += 3600; // lunch
+					hadLunch[now_server] = true;
+				}
+			}
+			servers_pool.push(now_server);
+		}
+		total_calls = kpi_waittime.length;
+		//q("result").innerHTML += "<br />Done with queue, generating stats.";
+		//q("result").innerHTML += "<br /><font style='color:blue;'>Need to wait: "+need_to_wait+" ("+percent2dp(need_to_wait/total_calls)+"%)</font>";
+		//q("result").innerHTML += "<br /><font style='color:blue;'>No need to wait: "+no_need_wait+" ("+percent2dp(no_need_wait/total_calls)+"%)</font>";
+		// Calculate stats
+		total_wait = 0;
+		wait_below_2min = 0;
+		wait_below_1min = 0;
+		for(i=0;i<kpi_waittime.length;i++){
+			total_wait += kpi_waittime[i];
+			if(kpi_waittime[i]<=120) wait_below_2min++;
+			if(kpi_waittime[i]<=60) wait_below_1min++;
+		}
+		avg_wait = total_wait/kpi_waittime.length;
+		//q("result").innerHTML += "<br /><font style='color:blue;'>Average wait time: "+parseTime(avg_wait)+"</font>";
+		//q("result").innerHTML += "<br /><font style='color:blue;'>Longest wait: "+parseTime(longest_wait)+"</font>";
+		//q("result").innerHTML += "<br /><font style='color:blue;'>Wait &lt= 2min: "+wait_below_2min+" ("+percent2dp(wait_below_2min/total_calls)+"%)</font>";
+		server_idle_percent = percent2dp(server_idle_time/(p_servers*(p_close-p_open)));
+		//q("result").innerHTML += "<br /><font style='color:blue;'>Staff Idle: "+server_idle_percent+"% ("+parseTime(server_idle_time/p_servers)+" per server)</font>";
+		//q("result").innerHTML += "</font>";
+		// Save Stats
+		op_results[this_run].total_calls = total_calls;
+		op_results[this_run].need_to_wait = need_to_wait;
+		op_results[this_run].no_need_wait = no_need_wait;
+		op_results[this_run].avg_wait = avg_wait;
+		op_results[this_run].longest_wait = longest_wait;
+		op_results[this_run].wait_below_2min = wait_below_2min;
+		op_results[this_run].wait_below_1min = wait_below_1min;
+		op_results[this_run].server_idle_time = server_idle_time;
+		op_results[this_run].server_idle_percent = server_idle_percent;
+	}
+	
+	runSimMgr = function(){
+		// Batch run simulations
+		op_average = new Object();
+		op_average.total_calls = 0;
+		op_average.need_to_wait = 0;
+		op_average.no_need_wait = 0;
+		op_average.avg_wait = 0;
+		op_average.longest_wait = 0;
+		op_average.wait_below_2min = 0;
+		op_average.wait_below_1min = 0;
+		op_average.server_idle_time = 0;
+		op_average.server_idle_percent = 0;
+		for(j=0;j<p_runs;j++){
+			op_results[j] = new Object();
+			runSim(j);
+			op_average.total_calls += op_results[j].total_calls;
+			op_average.need_to_wait += op_results[j].need_to_wait;
+			op_average.no_need_wait += op_results[j].no_need_wait;
+			op_average.avg_wait += op_results[j].avg_wait;
+			op_average.longest_wait += op_results[j].longest_wait;
+			op_average.wait_below_2min += op_results[j].wait_below_2min;
+			op_average.wait_below_1min += op_results[j].wait_below_1min;
+			op_average.server_idle_time += op_results[j].server_idle_time;
+			op_average.server_idle_percent += op_results[j].server_idle_percent;
+		}
+		op_average.total_calls /= p_runs;
+		op_average.need_to_wait /= p_runs;
+		op_average.no_need_wait /= p_runs;
+		op_average.avg_wait /= p_runs;
+		op_average.longest_wait /= p_runs;
+		op_average.wait_below_2min /= p_runs;
+		op_average.wait_below_1min /= p_runs;
+		op_average.server_idle_time /= p_runs;
+		op_average.server_idle_percent /= p_runs;		
+		// Display results
+		str = "<table border='1' cellspacing='0' bordercolor='silver'>";
+		str += "<tr><th>Run</th><th>Calls</th><th>Need to Wait (%)</th><th>Avg Wait (s)</th><th>Longest Wait (s)</th><th>Wait &lt=1min (%)</th><th>Wait &lt=2min (%)</th><th>Staff Idle (%)</th><th>Staff Idle (s/pax)</th></tr>";
+		str += "<tr><td>AVG</td>";
+		str += "<td style='color:blue;'>"+op_average.total_calls+"</td>";
+		str += "<td style='color:blue;'>"+percent2dp(op_average.need_to_wait/op_average.total_calls)+"</td>";
+		str += "<td style='color:blue;'>"+Math.round(op_average.avg_wait)+"</td>";
+		str += "<td style='color:blue;'>"+Math.round(op_average.longest_wait)+"</td>";
+		str += "<td style='color:blue;'>"+percent2dp(op_average.wait_below_1min/op_average.total_calls)+"</td>";
+		str += "<td style='color:blue;'>"+percent2dp(op_average.wait_below_2min/op_average.total_calls)+"</td>";
+		str += "<td style='color:blue;'>"+Math.round(op_average.server_idle_percent*100)/100+"</td>";
+		str += "<td style='color:blue;'>"+Math.round(op_average.server_idle_time/p_servers)+"</td>";
+		str += "</tr>";
+		for(j=0;j<p_runs;j++){
+			tr = op_results[j];
+			str += "<tr><td>"+(j+1)+"</td>";
+			str += "<td>"+tr.total_calls+"</td>";
+			str += "<td>"+percent2dp(tr.need_to_wait/tr.total_calls)+"</td>";
+			str += "<td>"+Math.round(tr.avg_wait)+"</td>";
+			str += "<td>"+Math.round(tr.longest_wait)+"</td>";
+			str += "<td>"+percent2dp(tr.wait_below_1min/tr.total_calls)+"</td>";
+			str += "<td>"+percent2dp(tr.wait_below_2min/tr.total_calls)+"</td>";
+			str += "<td>"+tr.server_idle_percent+"</td>";
+			str += "<td>"+Math.round(tr.server_idle_time/p_servers)+"</td>";
+			str += "</tr>";
+		}		
+		str += "</table>";
+		q("result").innerHTML = str;
+	}
+
+</script>
+
+<body>
+
+	<!--
+		SIMULATION ASSUMPTIONS
+		(01) Call queue is independent of service level (i.e. people will still call no matter how long they have to wait).
+		(02) The above (01) means that whether someone calls is independent of whether he has managed to talk to server earlier in the day.
+		(03) Callers have infinite patience, i.e. they do not hang up.
+		(04) Frequency of calls is the same throughout the day (this assumption can easily be modified).
+		(05) Probability of new call is independent of existing service level (i.e. people don't know how long they have to wait when they call, unlike supermarket queueing).
+		(06) Function of length of calls is the same throughout the day.
+		(07) Currently using Team 2A (CT/GST) as example
+	-->
+
+	<h3>CSV Call Centre Simulation</h3>
+	<p>
+		<div id='par' style='margin-top:0;'></div>
+		<input type='button' value='Run Simulation' onclick='runSimMgr();' />
+	</p>
+	<hr>
+	<div id='result'></div>
+
+</body>
+
+<script language='javascript'>
+
+	par = function(){
+		str = "<b><u>Parameters:</u></b><br />";
+		str += "E[Length of Call] = "+p_E_L+"s";
+		str += "<br />Total Calls = "+p_totalcalls;
+		str += "<br />E[Time to Next Person Calling In] = "+p_E_W+"s";
+		str += "<br />E[ACW time] = "+p_E_ACW(0)+"s if call&lt1min, "+p_E_ACW(1000)+"s if call&gt15min, linear in between";
+		str += "<br />No. of Servers = "+p_servers;
+		str += "<br />Runs = "+p_runs;
+		q("par").innerHTML = str;
+	}
+	par();
+
+</script>
+
+</html>
